@@ -3,6 +3,15 @@ name = "discordthing"
 version = "0.1.0"
 edition = "2024"
 
+[profile.dev]
+debug = false
+
+[profile.release]
+strip = true
+lto = true
+overflow-checks = true
+panic = "abort"
+
 [dependencies]
 anyhow = "1.0.97"
 env_logger = "0.11.7"
