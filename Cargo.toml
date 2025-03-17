@@ -2,6 +2,10 @@
 name = "discordthing"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/mascararivers/HookMultiTool"
+rust-version = "1.85.0"
+readme = "README.md"
+license = "Apache-2.0 OR MIT"
 
 [profile.dev]
 debug = false
