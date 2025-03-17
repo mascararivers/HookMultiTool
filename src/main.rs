@@ -5,7 +5,9 @@ use iced::widget::column;
 use iced::widget::container;
 use iced::widget::{button, text, text_input};
 use iced::{Element, Task};
+use serde::de;
 use serde_json::json;
+use log::{info, warn, error};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -15,7 +17,10 @@ enum Message {
     ChangeMessage(String),
     ChangeAvatarUrl(String),
     ChangeUsername(String),
-    HasEmbed(bool)
+    HasEmbed(bool),
+
+    ChangeEmbedTitle(String),
+    ChangeEmbedDescription(String)
 }
 
 #[derive(Default)]
@@ -28,13 +33,13 @@ struct Hook {
     embed: Option<Embed>,
 }
 
-#[derive(serde::Serialize, Default, Clone)]
+#[derive(serde::Serialize, Default, Clone, Debug)]
 struct Field {
     name: String,
     value: String,
     inline: bool
 }
-#[derive(serde::Serialize, Default, Clone)]
+#[derive(serde::Serialize, Default, Clone, Debug)]
 struct Embed {
     title: String,
     description: String,
@@ -43,6 +48,9 @@ struct Embed {
 
 async fn request(message: String, avatar_url: String, username: String, hook_url: String,
 embed: Option<Embed>) -> Result<()> {
+
+    info!("{:?}", &embed.clone().unwrap());
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -72,8 +80,11 @@ embed: Option<Embed>) -> Result<()> {
         });
 
         let client = reqwest::Client::new();
+
+        info!("Calling request with payload: {:#?}", &payload);
+
         let res = client.post(hook_url).json(&payload).send().await.unwrap();
-        println!("{:?}", res.text().await);
+        info!("{:#?}", res.text().await);
     });
 
     return Ok(());
@@ -88,13 +99,7 @@ impl Hook {
                 let avatar_url = self.avatar_url.clone().unwrap_or_default();
                 let username = self.username.clone().unwrap_or_default();
                 let hook_url = self.hook_url.clone();
-                let embed = if !self.has_embed {
-                    None
-                } else {
-                    Some(Embed::default())
-                };
-
-                let embed_title = embed.clone().unwrap().title;
+                let embed = self.embed.clone();
 
                 return Task::perform(request(message, avatar_url, username, hook_url, embed), |_| {
                     Message::Response
@@ -107,7 +112,30 @@ impl Hook {
             Message::ChangeAvatarUrl(url) => self.avatar_url = Some(url), 
             Message::ChangeMessage(msg) => self.message = msg,
             Message::ChangeUsername(usr) => self.username = Some(usr),
-            Message::HasEmbed(has) => self.has_embed = has
+            Message::HasEmbed(has) => {
+                self.has_embed = has;
+                self.embed = if has {
+                    Some(Embed::default())
+                } else { None }
+            },
+
+            Message::ChangeEmbedTitle(title) => {
+                if self.embed.is_none() {
+                    return Task::none();
+                }
+                if let Some(embed) = &mut self.embed {
+                    embed.title = title;
+                }
+            },
+            Message::ChangeEmbedDescription(description) => {
+                if self.embed.is_none() {
+                    return Task::none();
+                }
+
+                if let Some(embed) = &mut  self.embed {
+                    embed.description = description;
+                }
+            }
         }
         Task::none()
     }
@@ -124,6 +152,8 @@ impl Hook {
             text_input("Avatar URL", self.avatar_url.as_deref().unwrap_or("")).on_input(Message::ChangeAvatarUrl),
             text_input("Username", self.username.as_deref().unwrap_or("")).on_input(Message::ChangeUsername),
             embed_checkbox,
+            text_input("Embed Title", self.embed.as_ref().unwrap_or(&Embed::default()).title.as_str()).on_input(Message::ChangeEmbedTitle),
+            text_input("Embed Description", self.embed.as_ref().unwrap_or(&Embed::default()).description.as_str()).on_input(Message::ChangeEmbedDescription),
             btn
         ];
         container(clmn)
@@ -136,6 +166,7 @@ impl Hook {
 
 #[tokio::main]
 async fn main() -> iced::Result {
+    env_logger::init();
     let theme = |_s: &Hook| iced::Theme::Dark;
 
     //user_input().await;
