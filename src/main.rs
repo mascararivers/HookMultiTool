@@ -13,7 +13,7 @@ enum Message {
     Send,
     Response,
     ChangeHookUrl(String),
-    ChangeMessage(String),
+    ChangeHookContent(String),
     ChangeAvatarUrl(String),
     ChangeUsername(String),
     HasEmbed(bool),
@@ -89,7 +89,7 @@ async fn request(
         info!("{:#?}", res.text().await);
     });
 
-    return Ok(());
+    Ok(())
 }
 
 impl Hook {
@@ -112,7 +112,7 @@ impl Hook {
             }
             Message::ChangeHookUrl(hook) => self.hook_url = hook,
             Message::ChangeAvatarUrl(url) => self.avatar_url = Some(url),
-            Message::ChangeMessage(msg) => self.message = msg,
+            Message::ChangeHookContent(msg) => self.message = msg,
             Message::ChangeUsername(usr) => self.username = Some(usr),
             Message::HasEmbed(has) => {
                 self.has_embed = has;
@@ -147,7 +147,7 @@ impl Hook {
 
         let clmn = column![
             text_input("Webhook URL", &self.hook_url).on_input(Message::ChangeHookUrl),
-            text_input("Message", &self.message).on_input(Message::ChangeMessage),
+            text_input("Message", &self.message).on_input(Message::ChangeHookContent),
             text_input("Avatar URL", self.avatar_url.as_deref().unwrap_or(""))
                 .on_input(Message::ChangeAvatarUrl),
             text_input("Username", self.username.as_deref().unwrap_or(""))
