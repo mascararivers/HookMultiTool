@@ -6,7 +6,7 @@ use iced::{
     widget::{button, checkbox, column, container, text, text_input},
 };
 use log::info;
-use serde_json::json;
+use weboxide::api::{Embed as ApiEmbed, WebhookClient};
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -50,43 +50,29 @@ async fn request(
     avatar_url: String,
     username: String,
     hook_url: String,
-    embed: Option<Embed>,
+    embed: Option<ApiEmbed>,
 ) -> Result<()> {
-    info!("{:?}", &embed.clone().unwrap());
-
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
 
     rt.block_on(async move {
-        let e = if embed.is_none() {
-            json!([])
-        } else {
-            let embed_some = embed.unwrap();
-            json!([
-                {
-                    "title": embed_some.title,
-                    "type": "rich",
-                    "description": embed_some.description,
-                    "fields": embed_some.fields
-                }
-            ])
-        };
+        let http_client = reqwest::Client::new();
+        let client = WebhookClient::new(
+            http_client,
+            hook_url,
+            Some(avatar_url),
+            Some(username),
+            if embed.is_none() {
+                vec![]
+            } else {
+                vec![embed.unwrap()]
+            },
+        );
 
-        let payload = json!({
-            "content": message,
-            "avatar_url": avatar_url,
-            "username": username,
-            "embeds": e
-        });
-
-        let client = reqwest::Client::new();
-
-        info!("Calling request with payload: {:#?}", &payload);
-
-        let res = client.post(hook_url).json(&payload).send().await.unwrap();
-        info!("{:#?}", res.text().await);
+        let res = client.send_message(message).await.unwrap();
+        info!("{:?}", res);
     });
 
     Ok(())
@@ -100,10 +86,22 @@ impl Hook {
                 let avatar_url = self.avatar_url.clone().unwrap_or_default();
                 let username = self.username.clone().unwrap_or_default();
                 let hook_url = self.hook_url.clone();
-                let embed = self.embed.clone();
+                let embed = &self.embed;
+
+                let api_embed = ApiEmbed {
+                    title: embed.as_ref().unwrap_or(&Embed::default()).title.clone(),
+                    description: Some(
+                        embed
+                            .as_ref()
+                            .unwrap_or(&Embed::default())
+                            .description
+                            .clone(),
+                    ),
+                    ..Default::default()
+                };
 
                 return Task::perform(
-                    request(message, avatar_url, username, hook_url, embed),
+                    request(message, avatar_url, username, hook_url, Some(api_embed)),
                     |_| Message::Response,
                 );
             }
@@ -164,11 +162,7 @@ impl Hook {
             .on_input(Message::ChangeEmbedTitle),
             text_input(
                 "Embed Description",
-                self.embed
-                    .as_ref()
-                    .unwrap_or(&Embed::default())
-                    .description
-                    .as_str()
+                &self.embed.as_ref().unwrap_or(&Embed::default()).description
             )
             .on_input(Message::ChangeEmbedDescription),
             btn
