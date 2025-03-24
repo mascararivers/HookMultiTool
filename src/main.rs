@@ -71,8 +71,7 @@ async fn request(
             },
         );
 
-        let res = client.send_message(message).await.unwrap();
-        info!("{:?}", res);
+        client.send_message(message).await.unwrap();
     });
 
     Ok(())
@@ -100,8 +99,14 @@ impl Hook {
                     ..Default::default()
                 };
 
+                let optional_embed = if self.has_embed {
+                    Some(api_embed)
+                } else {
+                    None
+                };
+
                 return Task::perform(
-                    request(message, avatar_url, username, hook_url, Some(api_embed)),
+                    request(message, avatar_url, username, hook_url, optional_embed),
                     |_| Message::Response,
                 );
             }
@@ -139,34 +144,43 @@ impl Hook {
     }
 
     fn view(&self) -> Element<Message> {
-        let btn = button(text("Send")).on_press(Message::Send);
+        let btn: button::Button<'_, Message, iced::Theme, iced::Renderer> =
+            button(text("Send")).on_press(Message::Send);
 
         let embed_checkbox = checkbox("Has Embed", self.has_embed).on_toggle(Message::HasEmbed);
 
-        let clmn = column![
+        let mut clmn = column![
             text_input("Webhook URL", &self.hook_url).on_input(Message::ChangeHookUrl),
             text_input("Message", &self.message).on_input(Message::ChangeHookContent),
             text_input("Avatar URL", self.avatar_url.as_deref().unwrap_or(""))
                 .on_input(Message::ChangeAvatarUrl),
             text_input("Username", self.username.as_deref().unwrap_or(""))
                 .on_input(Message::ChangeUsername),
-            embed_checkbox,
-            text_input(
-                "Embed Title",
-                self.embed
-                    .as_ref()
-                    .unwrap_or(&Embed::default())
-                    .title
-                    .as_str()
-            )
-            .on_input(Message::ChangeEmbedTitle),
-            text_input(
-                "Embed Description",
-                &self.embed.as_ref().unwrap_or(&Embed::default()).description
-            )
-            .on_input(Message::ChangeEmbedDescription),
-            btn
+            embed_checkbox
         ];
+        if self.has_embed {
+            clmn = clmn.push({
+                container({
+                    column![
+                        text_input(
+                            "Embed Title",
+                            self.embed
+                                .as_ref()
+                                .unwrap_or(&Embed::default())
+                                .title
+                                .as_str()
+                        )
+                        .on_input(Message::ChangeEmbedTitle),
+                        text_input(
+                            "Embed Description",
+                            &self.embed.as_ref().unwrap_or(&Embed::default()).description
+                        )
+                        .on_input(Message::ChangeEmbedDescription),
+                    ]
+                })
+            });
+        }
+        clmn = clmn.push(btn);
         container(clmn)
             .width(iced::Length::Fill)
             .height(iced::Length::Fill)
