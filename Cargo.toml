@@ -1,5 +1,5 @@
 [package]
-name = "discordthing"
+name = "HookMultiTool"
 version = "0.1.0"
 edition = "2024"
 repository = "https://github.com/mascararivers/HookMultiTool"
@@ -21,8 +21,9 @@ anyhow = "1.0.97"
 env_logger = "0.11.7"
 iced = "0.13.1"
 log = "0.4.26"
+native-dialog = "0.7.0"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tokio = { version = "1", features = ["full"] }
-weboxide = "0.1.1"
+weboxide = { git = "https://github.com/mascararivers/weboxide" }
