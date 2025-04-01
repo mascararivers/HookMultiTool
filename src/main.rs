@@ -6,6 +6,7 @@ use iced::{
     widget::{button, checkbox, column, container, row, text, text_input},
 };
 use serde::Serialize;
+use std::sync::OnceLock;
 use weboxide::api::{Embed as ApiEmbed, Field, Footer, Image, Thumbnail, WebhookClient};
 
 #[derive(Debug, Clone)]
@@ -31,7 +32,7 @@ enum Message {
     ChangeImageUrl(String),
 
     HasThumbnail(bool),
-    ChangeThumbnailUrl(String)
+    ChangeThumbnailUrl(String),
 }
 
 #[derive(Default)]
@@ -59,11 +60,13 @@ struct Embed {
     timestamp: Option<bool>,
 }
 
+// impl Into<String> indicates any type that can be converted into a String, such as
+// &str, String, &String, etc.
 async fn request(
-    message: String,
-    avatar_url: String,
-    username: String,
-    hook_url: String,
+    message: impl Into<String>,
+    avatar_url: impl Into<String>,
+    username: impl Into<String>,
+    hook_url: impl Into<String>,
     embed: Option<ApiEmbed>,
 ) -> Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -75,213 +78,176 @@ async fn request(
         let http_client = reqwest::Client::new();
         let client = WebhookClient::new(
             http_client,
-            hook_url,
-            Some(avatar_url),
-            Some(username),
-            if embed.is_none() {
-                vec![]
-            } else {
-                vec![embed.unwrap()]
-            },
+            hook_url.into(),
+            Some(avatar_url.into()),
+            Some(username.into()),
+            embed.into_iter().collect(),
         );
 
-        client.send_message(message).await.unwrap();
+        client.send_message(message.into()).await.unwrap();
     });
 
     Ok(())
 }
 
 impl Hook {
+    fn default_embed() -> &'static Embed {
+        static DEFAULT: OnceLock<Embed> = OnceLock::new();
+        DEFAULT.get_or_init(|| Embed::default())
+    }
+
+    /// Returns a reference to the embed or a default embed.
+    fn embed_or_default(&self) -> &Embed {
+        self.embed.as_ref().unwrap_or_else(|| Self::default_embed())
+    }
+
+    /// Returns a reference to the footer (if any) or a default footer.
+    fn footer_or_default(&self) -> &Footer {
+        static DEFAULT: OnceLock<Footer> = OnceLock::new();
+        let default_footer = DEFAULT.get_or_init(Footer::default);
+        self.embed_or_default()
+            .footer
+            .as_ref()
+            .unwrap_or(default_footer)
+    }
+
+    /// Returns the URL for the image if available.
+    fn image_url(&self) -> &str {
+        self.embed
+            .as_ref()
+            .and_then(|e| e.image.as_ref())
+            .map(|i| i.url.as_str())
+            .unwrap_or("")
+    }
+
+    /// Returns the URL for the thumbnail if available.
+    fn thumbnail_url(&self) -> &str {
+        self.embed
+            .as_ref()
+            .and_then(|e| e.thumbnail.as_ref())
+            .map(|t| t.url.as_str())
+            .unwrap_or("")
+    }
+
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Send => {
-                let message = self.message.clone();
-                let avatar_url = self.avatar_url.clone().unwrap_or_default();
-                let username = self.username.clone().unwrap_or_default();
-                let hook_url = self.hook_url.clone();
-                let embed = &self.embed;
+                let default_embed = &Embed::default();
+                let embed_ref = self.embed.as_ref().unwrap_or(default_embed);
 
-                let api_embed = ApiEmbed {
-                    title: embed.as_ref().unwrap_or(&Embed::default()).title.clone(),
-                    description: Some(
-                        embed
-                            .as_ref()
-                            .unwrap_or(&Embed::default())
-                            .description
-                            .clone(),
-                    ),
-                    // footer: embed.as_ref().unwrap_or(&Embed::default()).footer.clone(),
-                    ..Default::default()
+                let mut api_embed = ApiEmbed {
+                    title: embed_ref.title.clone(),
+                    description: Some(embed_ref.description.clone()),
+                    ..ApiEmbed::default()
                 };
 
-                let advanced_api_embed = ApiEmbed {
-                    title: embed.as_ref().unwrap_or(&Embed::default()).title.clone(),
-                    description: Some(
-                        embed
-                            .as_ref()
-                            .unwrap_or(&Embed::default())
-                            .description
-                            .clone(),
-                    ),
-                    fields: self
-                        .embed
-                        .as_ref()
-                        .unwrap_or(&Embed::default())
-                        .fields
-                        .clone(),
-                    image: embed
-                        .as_ref()
-                        .unwrap_or(&Embed::default())
-                        .image
-                        .clone(),
-                    thumbnail: embed
-                        .as_ref()
-                        .unwrap_or(&Embed::default())
-                        .thumbnail
-                        .clone(),
-                    footer: embed.as_ref().unwrap_or(&Embed::default()).footer.clone(),
-                    ..Default::default()
-                };
+                if self.advanced_mode {
+                    api_embed.fields = embed_ref.fields.clone();
+                    api_embed.image = embed_ref.image.clone();
+                    api_embed.thumbnail = embed_ref.thumbnail.clone();
+                    api_embed.footer = embed_ref.footer.clone();
+                }
 
-                let optional_embed = if self.has_embed {
-                    if self.advanced_mode {
-                        Some(advanced_api_embed)
-                    } else {
-                        Some(api_embed)
-                    }
-                } else {
-                    None
-                };
+                let optional_embed = self.has_embed.then_some(api_embed);
 
                 return Task::perform(
-                    request(message, avatar_url, username, hook_url, optional_embed),
+                    request(
+                        &self.message,
+                        self.avatar_url.as_deref().unwrap_or(""),
+                        self.username.as_deref().unwrap_or(""),
+                        &self.hook_url,
+                        optional_embed,
+                    ),
                     |_| Message::Response,
                 );
             }
-            Message::Response => {
-                return Task::none();
+            Message::Response => return Task::none(),
+            Message::ChangeHookUrl(hook) => {
+                self.hook_url = hook;
             }
-            Message::ChangeHookUrl(hook) => self.hook_url = hook,
-            Message::ChangeAvatarUrl(url) => self.avatar_url = Some(url),
-            Message::ChangeHookContent(msg) => self.message = msg,
-            Message::ChangeUsername(usr) => self.username = Some(usr),
+            Message::ChangeAvatarUrl(url) => {
+                self.avatar_url = Some(url);
+            }
+            Message::ChangeHookContent(msg) => {
+                self.message = msg;
+            }
+            Message::ChangeUsername(usr) => {
+                self.username = Some(usr);
+            }
             Message::HasEmbed(has) => {
                 self.has_embed = has;
-                self.embed = if has { Some(Embed::default()) } else { None }
+                self.embed = has.then(Embed::default);
             }
-
             Message::ChangeEmbedTitle(title) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                }
                 if let Some(embed) = &mut self.embed {
                     embed.title = title;
                 }
             }
             Message::ChangeEmbedDescription(description) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                }
-
                 if let Some(embed) = &mut self.embed {
                     embed.description = description;
                 }
             }
-
-            // ~ Advanced mode ~
             Message::AdvancedToggle(toggled) => {
                 self.advanced_mode = toggled;
             }
-
-            // ~ Image and Thumbnail ~ needs width and height customization
-
             Message::HasImage(has) => {
-                if self.has_embed { 
-                    self.has_image = has;       
-                } else {
-                    return Task::none();
-                }
+                self.has_image = has && self.has_embed;
             }
             Message::ChangeImageUrl(url) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                } else {
-                    self.embed.clone().unwrap().image = Some(Image { url: url, height: Some(32), width: Some(32) });
+                if let Some(embed) = &mut self.embed {
+                    embed.image = Some(Image {
+                        url,
+                        height: Some(32),
+                        width: Some(32),
+                    });
                 }
             }
-
             Message::HasThumbnail(has) => {
-                if self.has_embed {
-                    self.has_thumbnail = has;
-                } else {
-                    return Task::none();
-                }
+                self.has_thumbnail = has && self.has_embed;
             }
-
             Message::ChangeThumbnailUrl(url) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                } else {
-                    self.embed.clone().unwrap().thumbnail = Some(Thumbnail { url: url, height: Some(32), width: Some(32) });
+                if let Some(embed) = &mut self.embed {
+                    embed.thumbnail = Some(Thumbnail {
+                        url,
+                        height: Some(32),
+                        width: Some(32),
+                    });
                 }
             }
-
-            // ~ Footer stuff ~
             Message::HasFooter(has) => {
                 self.has_footer = has;
-                self.embed.as_mut().unwrap().footer =
-                    if has { Some(Footer::default()) } else { None };
+                if let Some(embed) = &mut self.embed {
+                    embed.footer = has.then(Footer::default);
+                }
             }
             Message::ChangeFooterText(text) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                }
                 if let Some(embed) = &mut self.embed {
                     if self.has_footer {
-                        if embed.footer.is_none() {
-                            embed.footer = Some(Footer::default());
-                        }
-                        embed.footer.as_mut().unwrap().text = Some(text);
-                        println!("Footer text: {:?}", embed.footer.as_ref().unwrap().text);
+                        let footer = embed.footer.get_or_insert_with(Footer::default);
+                        footer.text = Some(text);
                     }
                 }
             }
             Message::ChangeFooterIcon(url) => {
-                if self.embed.is_none() {
-                    return Task::none();
-                }
                 if let Some(embed) = &mut self.embed {
                     if self.has_footer {
-                        if embed.footer.is_none() {
-                            embed.footer = Some(Footer::default());
-                        }
-                        embed.footer.as_mut().unwrap().icon_url = Some(url);
-                        println!("Footer icon: {:?}", embed.footer.as_ref().unwrap().icon_url);
+                        let footer = embed.footer.get_or_insert_with(Footer::default);
+                        footer.icon_url = Some(url);
                     }
                 }
             }
-        }
+        };
         Task::none()
     }
 
     fn view(&self) -> Element<Message> {
         const WIDTH: f32 = 400.0 * 0.95;
 
-        let btn: button::Button<'_, Message, iced::Theme, iced::Renderer> =
-            button(text("Send")).on_press(Message::Send);
-
+        let btn = button(text("Send")).on_press(Message::Send);
         let embed_checkbox = checkbox("Has Embed", self.has_embed).on_toggle(Message::HasEmbed);
-
-        let advanced_mode: iced::widget::Checkbox<'_, Message, iced::Theme, iced::Renderer> =
+        let advanced_mode =
             checkbox("Advanced Mode", self.advanced_mode).on_toggle(Message::AdvancedToggle);
-
-        /*let text: iced::widget::Text<iced::Theme, iced::Renderer> = text(if self.has_embed {
-            self.embed.as_ref().unwrap().title.clone()
-        } else {
-            "".to_string()
-        });
-        */
- // For future embed preview
 
         let mut column = column![
             text_input("Webhook URL", &self.hook_url)
@@ -301,118 +267,59 @@ impl Hook {
         column = column.push(btn);
 
         if self.has_embed {
-            column = column.push({
-                container({
-                    column![
-                        text_input(
-                            "Embed Title",
-                            self.embed
-                                .as_ref()
-                                .unwrap_or(&Embed::default())
-                                .title
-                                .as_str()
-                        )
-                        .width(WIDTH)
-                        .on_input(Message::ChangeEmbedTitle),
-                        text_input(
-                            "Embed Description",
-                            &self.embed.as_ref().unwrap_or(&Embed::default()).description
-                        )
-                        .width(WIDTH)
-                        .on_input(Message::ChangeEmbedDescription),
-                        advanced_mode
-                    ]
-                })
-            });
+            column = column.push(container(column![
+                text_input("Embed Title", self.embed_or_default().title.as_str())
+                    .width(WIDTH)
+                    .on_input(Message::ChangeEmbedTitle),
+                text_input(
+                    "Embed Description",
+                    self.embed_or_default().description.as_str()
+                )
+                .width(WIDTH)
+                .on_input(Message::ChangeEmbedDescription),
+                advanced_mode
+            ]));
         }
-        // Advanced mode for extra embed stuff
+
         if self.advanced_mode {
-            column = column.push({
-                container({
-                    column![
-                        checkbox("Has Footer", self.has_footer).on_toggle(Message::HasFooter),
-                        checkbox("Has Image", self.has_image).on_toggle(Message::HasImage),
-                        checkbox("Has Thumbnail", self.has_thumbnail).on_toggle(Message::HasThumbnail)
-                    ]
-                })
-            })
+            column = column.push(container(column![
+                checkbox("Has Footer", self.has_footer).on_toggle(Message::HasFooter),
+                checkbox("Has Image", self.has_image).on_toggle(Message::HasImage),
+                checkbox("Has Thumbnail", self.has_thumbnail).on_toggle(Message::HasThumbnail)
+            ]));
         }
+
         if self.has_footer {
-            column = column.push({
-                container({
-                    column![
-                        text_input(
-                            "Footer Text",
-                            self.embed
-                                .as_ref()
-                                .unwrap_or(&Embed::default())
-                                .footer
-                                .as_ref()
-                                .unwrap_or(&Footer::default())
-                                .text
-                                .as_deref()
-                                .unwrap_or("")
-                        )
-                        .on_input(Message::ChangeFooterText)
-                        .width(WIDTH),
-                        text_input(
-                            "Footer Icon URL",
-                            self.embed
-                                .as_ref()
-                                .unwrap_or(&Embed::default())
-                                .footer
-                                .as_ref()
-                                .unwrap_or(&Footer::default())
-                                .icon_url
-                                .clone()
-                                .unwrap_or("".to_string())
-                                .as_str()
-                        )
-                        .on_input(Message::ChangeFooterIcon)
-                        .width(WIDTH)
-                    ]
-                })
-            })
+            column = column.push(container(column![
+                text_input(
+                    "Footer Text",
+                    self.footer_or_default().text.as_deref().unwrap_or("")
+                )
+                .on_input(Message::ChangeFooterText)
+                .width(WIDTH),
+                text_input(
+                    "Footer Icon URL",
+                    self.footer_or_default().icon_url.as_deref().unwrap_or("")
+                )
+                .on_input(Message::ChangeFooterIcon)
+                .width(WIDTH)
+            ]));
         }
+
         if self.has_image {
-            column = column.push({
-                container({
-                    column![
-                    text_input(
-                        "Image URL",
-                        <std::string::String as AsRef<_>>::as_ref(&self.embed
-                            .as_ref()
-                            .unwrap_or(&Embed::default())
-                            .image
-                            .clone()
-                            .unwrap_or(Image::default())
-                            .url)
-                    )
+            column = column.push(container(column![
+                text_input("Image URL", self.image_url())
                     .on_input(Message::ChangeImageUrl)
                     .width(WIDTH)
-                    ]
-                })
-            })
+            ]));
         }
+
         if self.has_thumbnail {
-            column = column.push({
-                container({
-                    column![
-                    text_input(
-                        "Thumbnail URL",
-                        <std::string::String as AsRef<_>>::as_ref(&self.embed
-                            .as_ref()
-                            .unwrap_or(&Embed::default())
-                            .thumbnail
-                            .clone()
-                            .unwrap_or(Thumbnail::default())
-                            .url)
-                    )
+            column = column.push(container(column![
+                text_input("Thumbnail URL", self.thumbnail_url())
                     .on_input(Message::ChangeThumbnailUrl)
                     .width(WIDTH)
-                    ]
-                })
-            })
+            ]));
         }
 
         let row = row![column].spacing(10);
