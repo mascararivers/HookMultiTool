@@ -148,14 +148,15 @@ impl Hook {
                     api_embed.footer = embed_ref.footer.clone();
                 }
 
+                // if has_embed is true, return api_embed (Option<T>)
                 let optional_embed = self.has_embed.then_some(api_embed);
 
                 return Task::perform(
                     request(
-                        &self.message,
-                        self.avatar_url.as_deref().unwrap_or(""),
-                        self.username.as_deref().unwrap_or(""),
-                        &self.hook_url,
+                        self.message.clone(),
+                        self.avatar_url.clone().unwrap_or_default(),
+                        self.username.clone().unwrap_or("".to_string()),
+                        self.hook_url.clone(),
                         optional_embed,
                     ),
                     |_| Message::Response,
@@ -176,6 +177,7 @@ impl Hook {
             }
             Message::HasEmbed(has) => {
                 self.has_embed = has;
+                // return default embed if has is true, or else None
                 self.embed = has.then(Embed::default);
             }
             Message::ChangeEmbedTitle(title) => {
